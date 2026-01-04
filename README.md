@@ -2,6 +2,8 @@
 
 A Chrome MV3 extension that keeps your ChatGPT conversations synced to a local folder using the File System Access API. No native host or companion app required.
 
+![ChatGPT Local Sync widget](docs/widget.svg)
+
 ## Features
 
 - Syncs conversations from ChatGPT to a local folder.
