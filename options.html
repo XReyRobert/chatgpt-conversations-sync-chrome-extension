@@ -1,0 +1,93 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>ChatGPT Local Sync Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>ChatGPT Local Sync</h1>
+        <p class="subtitle">Configure where conversations are stored and how often they sync.</p>
+      </header>
+
+      <section class="card">
+        <div class="folder-row">
+          <div>
+            <div class="label">Selected folder</div>
+            <div id="folderLabel" class="folder-label">No folder selected</div>
+          </div>
+          <button id="openChatgpt" class="secondary">Open ChatGPT</button>
+        </div>
+        <p class="hint">Use the in-page "Sync now" button on chatgpt.com to select a folder the first time.</p>
+
+        <label>
+          <span>Sync interval (minutes)</span>
+          <input id="syncInterval" type="number" min="1" step="1" />
+        </label>
+
+        <label>
+          <span>Parallel conversation fetches (1-10)</span>
+          <input id="parallelFetches" type="number" min="1" max="10" step="1" />
+        </label>
+
+        <div class="checkboxes">
+          <label>
+            <input id="includeJson" type="checkbox" />
+            <span>Save JSON files</span>
+          </label>
+          <label>
+            <input id="includeMarkdown" type="checkbox" />
+            <span>Save Markdown files</span>
+          </label>
+          <label>
+            <input id="deleteRemoved" type="checkbox" />
+            <span>Delete local files when a chat disappears</span>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="save">Save options</button>
+          <button id="syncNow" class="secondary">Sync now</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Status</h2>
+        <div class="status" id="status"></div>
+      </section>
+
+      <section class="card">
+        <div class="index-header">
+          <h2>Local index</h2>
+          <div class="index-actions">
+            <button id="refreshIndex" class="secondary">Refresh</button>
+            <button id="reInventory" class="danger">Re-inventory</button>
+          </div>
+        </div>
+        <div class="index-meta" id="indexMeta"></div>
+        <div class="index-controls">
+          <input id="indexSearch" type="text" placeholder="Filter by title or id" />
+          <select id="indexStatus">
+            <option value="all">All statuses</option>
+            <option value="updated">Updated</option>
+            <option value="unchanged">Unchanged</option>
+            <option value="error">Error</option>
+            <option value="unknown">Unknown</option>
+          </select>
+          <select id="indexSort">
+            <option value="updated-desc">Last updated (newest)</option>
+            <option value="updated-asc">Last updated (oldest)</option>
+            <option value="title-asc">Title (A-Z)</option>
+            <option value="title-desc">Title (Z-A)</option>
+          </select>
+        </div>
+        <div class="index-count" id="indexCount"></div>
+        <div class="index-list" id="indexList"></div>
+      </section>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>
