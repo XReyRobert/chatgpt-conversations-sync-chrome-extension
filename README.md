@@ -69,6 +69,7 @@ Your-Folder/
 - This uses undocumented ChatGPT web endpoints and may break if the site changes.
 - The File System Access API requires a user gesture to grant access.
 - Clearing ChatGPT site data removes the stored folder handle.
+- All synced files (including JSON `raw` payloads) are stored unencrypted on disk. Choose a private folder and avoid shared/cloud locations if that is a concern.
 
 ## Development
 
