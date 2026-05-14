@@ -92,7 +92,10 @@ select {
 
 .actions {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 button {
@@ -105,9 +108,34 @@ button {
   font-size: 14px;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button.secondary {
   background: #f0f0f0;
   color: #1e1e1e;
+}
+
+.action-with-feedback {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.action-feedback {
+  min-width: 64px;
+  font-size: 12px;
+  color: #555;
+}
+
+.action-feedback.ok {
+  color: #1f6b2f;
+}
+
+.action-feedback.error {
+  color: #9f2f2f;
 }
 
 .index-actions {
@@ -124,7 +152,53 @@ button.danger {
   font-size: 13px;
   color: #444;
   line-height: 1.6;
-  white-space: pre-line;
+}
+
+.status-banner {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-banner.idle {
+  background: #ededed;
+  color: #555;
+}
+
+.status-banner.syncing {
+  background: #fff4d6;
+  color: #745400;
+}
+
+.status-banner.ok {
+  background: #d9f4e3;
+  color: #1f6b2f;
+}
+
+.status-banner.error {
+  background: #fde0e0;
+  color: #9f2f2f;
+}
+
+.status-details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0;
+}
+
+.status-details dt {
+  color: #777;
+}
+
+.status-details dd {
+  margin: 0;
+  color: #333;
+  overflow-wrap: anywhere;
 }
 
 .index-header {

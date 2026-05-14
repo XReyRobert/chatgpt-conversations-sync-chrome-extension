@@ -84,6 +84,9 @@ Full inventory behavior:
 
 - Progress bar uses a dynamic target based on total hint and listed count.
 - Progress is capped at 99 percent until listing is complete, then reaches 100 percent.
+- Sync start clears any prior finished timestamp and summary, then publishes a starting progress state.
+- The background watchdog fails a run only after 5 minutes without sync messages.
+- If stored status still looks active after the background worker is no longer running a sync, it is shown as interrupted instead of continuing to display as syncing.
 - Status values:
   - `updated`: conversation was fetched and written.
   - `unchanged`: conversation was skipped based on update time.

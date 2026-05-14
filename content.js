@@ -3,6 +3,7 @@ const STORE_NAME = "handles";
 const HANDLE_KEY = "root";
 const PROGRESS_THROTTLE_MS = 500;
 const MAX_PARTIAL_AGE_MS = 24 * 60 * 60 * 1000;
+const STATUS_ACTIVE_GRACE_MS = 5 * 60 * 1000;
 
 let cachedHandle = null;
 let syncInProgress = false;
@@ -666,6 +667,9 @@ function isGlobalSyncing(status) {
   if (!status) {
     return false;
   }
+  if (statusLooksInterrupted(status)) {
+    return false;
+  }
   if (status.progress && status.progress.total) {
     return true;
   }
@@ -675,6 +679,21 @@ function isGlobalSyncing(status) {
   }
   const finishedAt = status.lastSyncFinishedAt ? Date.parse(status.lastSyncFinishedAt) : NaN;
   return !Number.isFinite(finishedAt) || finishedAt < startedAt;
+}
+
+function statusLooksInterrupted(status) {
+  if (!status || status.progress || status.lastError) {
+    return false;
+  }
+  const startedAt = status.lastSyncStartedAt ? Date.parse(status.lastSyncStartedAt) : NaN;
+  if (!Number.isFinite(startedAt)) {
+    return false;
+  }
+  const finishedAt = status.lastSyncFinishedAt ? Date.parse(status.lastSyncFinishedAt) : NaN;
+  if (Number.isFinite(finishedAt) && finishedAt >= startedAt) {
+    return false;
+  }
+  return Date.now() - startedAt > STATUS_ACTIVE_GRACE_MS;
 }
 
 function setIndicator(state, title) {
@@ -709,7 +728,10 @@ function applyGlobalStatus(status) {
   }
 
   const syncing = syncInProgress || isGlobalSyncing(status);
-  if (syncing) {
+  const interrupted = statusLooksInterrupted(status);
+  if (interrupted) {
+    setIndicator("error", "Previous sync was interrupted. Start sync again.");
+  } else if (syncing) {
     const progress = status && status.progress ? status.progress : null;
     const title = progress && progress.total
       ? `Syncing: ${formatCount(progress.processed || 0)} / ${formatCount(progress.total)}`
@@ -727,6 +749,12 @@ function applyGlobalStatus(status) {
     return;
   }
   if (folderAccessState !== "ok") {
+    return;
+  }
+
+  if (interrupted) {
+    updateStatus("Error: Previous sync was interrupted. Start sync again.");
+    updateProgress(0, 0, false);
     return;
   }
 

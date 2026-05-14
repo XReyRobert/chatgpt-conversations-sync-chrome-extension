@@ -1,33 +1,13 @@
-function formatStatus(status) {
-  if (!status) {
-    return "No sync activity yet.";
-  }
-  const lines = [];
-  if (status.lastSyncStartedAt) {
-    lines.push(`Last sync started: ${status.lastSyncStartedAt}`);
-  }
-  if (status.lastSyncFinishedAt) {
-    lines.push(`Last sync finished: ${status.lastSyncFinishedAt}`);
-  }
-  if (status.lastSyncReason) {
-    lines.push(`Reason: ${status.lastSyncReason}`);
-  }
-  if (status.lastSyncSummary) {
-    const summary = status.lastSyncSummary;
-    lines.push(
-      `Summary: ${summary.updated || 0} updated, ${summary.skipped || 0} unchanged, ${summary.errors || 0} errors, ${summary.total || 0} total.`
-    );
-  }
-  if (status.progress && status.progress.total) {
-    const progress = status.progress;
-    const label = progress.status ? `${progress.status} ` : "";
-    lines.push(`Progress: ${label}${progress.processed || 0} / ${progress.total}`);
-  }
-  if (status.lastError) {
-    lines.push(`Error: ${status.lastError}`);
-  }
-  return lines.length ? lines.join("\n") : "No sync activity yet.";
-}
+const NO_FOLDER_LABEL = "No folder selected";
+const SELECT_FOLDER_HINT =
+  'Open ChatGPT and use the in-page "Sync now" button to select a folder.';
+const READY_FOLDER_HINT =
+  "Manual sync can start here once a folder is already selected. Re-grant folder access from the ChatGPT page if Chrome asks again.";
+const STATUS_ACTIVE_GRACE_MS = 5 * 60 * 1000;
+
+let currentFolderLabel = NO_FOLDER_LABEL;
+let latestStatus = null;
+let saveFeedbackTimer = null;
 
 function formatIso(value) {
   if (!value) {
@@ -57,6 +37,181 @@ function formatEpochSeconds(value) {
 
 function formatCount(value) {
   return String(value || 0).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+function hasSelectedFolder() {
+  return currentFolderLabel && currentFolderLabel !== NO_FOLDER_LABEL;
+}
+
+function statusStartedAfterFinished(status) {
+  if (!status || status.lastError) {
+    return false;
+  }
+  const startedAt = status.lastSyncStartedAt ? Date.parse(status.lastSyncStartedAt) : NaN;
+  if (!Number.isFinite(startedAt)) {
+    return false;
+  }
+  const finishedAt = status.lastSyncFinishedAt ? Date.parse(status.lastSyncFinishedAt) : NaN;
+  return !Number.isFinite(finishedAt) || finishedAt < startedAt;
+}
+
+function statusLooksInterrupted(status) {
+  if (!status || status.progress || status.lastError || !statusStartedAfterFinished(status)) {
+    return false;
+  }
+  const startedAt = Date.parse(status.lastSyncStartedAt);
+  return Date.now() - startedAt > STATUS_ACTIVE_GRACE_MS;
+}
+
+function statusIsSyncing(status) {
+  return !!(
+    status &&
+    (status.progress ||
+      (statusStartedAfterFinished(status) && !statusLooksInterrupted(status)))
+  );
+}
+
+function updateSyncButtonState() {
+  const syncButton = document.getElementById("syncNow");
+  const reInventoryButton = document.getElementById("reInventory");
+  if (!syncButton && !reInventoryButton) {
+    return;
+  }
+  const noFolder = !hasSelectedFolder();
+  const syncing = statusIsSyncing(latestStatus);
+  const title = noFolder
+    ? SELECT_FOLDER_HINT
+    : syncing
+      ? "A sync is already running."
+      : "";
+  if (syncButton) {
+    syncButton.disabled = noFolder || syncing;
+    syncButton.title = title;
+  }
+  if (reInventoryButton) {
+    reInventoryButton.disabled = noFolder || syncing;
+    reInventoryButton.title = title;
+  }
+}
+
+function updateFolderUi(label) {
+  currentFolderLabel = label || NO_FOLDER_LABEL;
+  document.getElementById("folderLabel").textContent = currentFolderLabel;
+  document.getElementById("folderHint").textContent = hasSelectedFolder()
+    ? READY_FOLDER_HINT
+    : SELECT_FOLDER_HINT;
+  updateSyncButtonState();
+}
+
+function showSaveFeedback(message, state) {
+  const feedback = document.getElementById("saveFeedback");
+  feedback.textContent = message || "";
+  feedback.classList.remove("ok", "error");
+  if (state) {
+    feedback.classList.add(state);
+  }
+  if (saveFeedbackTimer) {
+    clearTimeout(saveFeedbackTimer);
+  }
+  if (message) {
+    saveFeedbackTimer = setTimeout(() => {
+      feedback.textContent = "";
+      feedback.classList.remove("ok", "error");
+      saveFeedbackTimer = null;
+    }, 2500);
+  }
+}
+
+function getStatusPresentation(status) {
+  if (!status) {
+    return { state: "idle", label: "No activity" };
+  }
+  if (statusLooksInterrupted(status)) {
+    return { state: "error", label: "Needs attention" };
+  }
+  if (status.progress) {
+    const label = status.progress.status || "Syncing";
+    return { state: "syncing", label };
+  }
+  if (statusStartedAfterFinished(status)) {
+    return { state: "syncing", label: "Starting sync" };
+  }
+  if (status.lastError) {
+    return { state: "error", label: "Needs attention" };
+  }
+  if (status.lastSyncFinishedAt) {
+    return { state: "ok", label: "Synced" };
+  }
+  return { state: "idle", label: "Idle" };
+}
+
+function appendStatusDetail(list, label, value) {
+  if (!value) {
+    return;
+  }
+  const term = document.createElement("dt");
+  term.textContent = label;
+  const detail = document.createElement("dd");
+  detail.textContent = value;
+  list.appendChild(term);
+  list.appendChild(detail);
+}
+
+function renderStatus(status) {
+  latestStatus = status || null;
+  const statusElement = document.getElementById("status");
+  statusElement.textContent = "";
+
+  const presentation = getStatusPresentation(status);
+  const banner = document.createElement("div");
+  banner.className = `status-banner ${presentation.state}`;
+  banner.textContent = presentation.label;
+  statusElement.appendChild(banner);
+
+  const details = document.createElement("dl");
+  details.className = "status-details";
+
+  if (!status) {
+    appendStatusDetail(details, "Status", "No sync activity yet.");
+  } else {
+    appendStatusDetail(
+      details,
+      "Started",
+      status.lastSyncStartedAt ? formatIso(status.lastSyncStartedAt) : ""
+    );
+    appendStatusDetail(
+      details,
+      "Finished",
+      status.lastSyncFinishedAt ? formatIso(status.lastSyncFinishedAt) : ""
+    );
+    appendStatusDetail(details, "Reason", status.lastSyncReason || "");
+    if (status.lastSyncSummary) {
+      const summary = status.lastSyncSummary;
+      appendStatusDetail(
+        details,
+        "Summary",
+        `${formatCount(summary.updated)} updated, ${formatCount(summary.skipped)} unchanged, ${formatCount(summary.errors)} errors, ${formatCount(summary.total)} total`
+      );
+    }
+    if (status.progress) {
+      const progress = status.progress;
+      const progressText = progress.total
+        ? `${formatCount(progress.processed)} / ${formatCount(progress.total)}`
+        : progress.status || "Starting";
+      appendStatusDetail(details, "Progress", progressText);
+    }
+    appendStatusDetail(
+      details,
+      "Error",
+      status.lastError ||
+        (statusLooksInterrupted(status)
+          ? "Previous sync was interrupted. Start sync again."
+          : "")
+    );
+  }
+
+  statusElement.appendChild(details);
+  updateSyncButtonState();
 }
 
 function readOptions() {
@@ -275,23 +430,36 @@ function loadStatus() {
       return;
     }
     applyOptions(response.options);
-    document.getElementById("status").textContent = formatStatus(response.status);
+    renderStatus(response.status);
   });
 
   chrome.storage.local.get(["folderLabel"], (result) => {
-    const label = result && result.folderLabel ? result.folderLabel : "No folder selected";
-    document.getElementById("folderLabel").textContent = label;
+    const label = result && result.folderLabel ? result.folderLabel : NO_FOLDER_LABEL;
+    updateFolderUi(label);
   });
 }
 
 document.getElementById("save").addEventListener("click", () => {
+  const saveButton = document.getElementById("save");
   const options = readOptions();
+  saveButton.disabled = true;
+  showSaveFeedback("Saving...", "");
   chrome.runtime.sendMessage({ type: "update-options", options }, () => {
+    saveButton.disabled = false;
+    if (chrome.runtime.lastError) {
+      showSaveFeedback("Save failed", "error");
+      return;
+    }
+    showSaveFeedback("Saved", "ok");
     loadStatus();
   });
 });
 
 document.getElementById("syncNow").addEventListener("click", () => {
+  if (!hasSelectedFolder()) {
+    chrome.tabs.create({ url: "https://chatgpt.com/" });
+    return;
+  }
   chrome.runtime.sendMessage({ type: "sync-now" }, () => {
     loadStatus();
   });
@@ -306,8 +474,12 @@ document.getElementById("refreshIndex").addEventListener("click", () => {
 });
 
 document.getElementById("reInventory").addEventListener("click", () => {
+  const deleteRemoved = document.getElementById("deleteRemoved").checked;
+  const deleteWarning = deleteRemoved
+    ? "\n\nDelete local files when a chat disappears is ON. Files for chats that no longer appear in the full listing may be deleted."
+    : "";
   const confirmed = window.confirm(
-    "Re-inventory will restart a full conversation listing from the beginning. This can take a while for large accounts. Continue?"
+    `Re-inventory will restart a full conversation listing from the beginning. This can take a while for large accounts.${deleteWarning}\n\nContinue?`
   );
   if (!confirmed) {
     return;
@@ -338,15 +510,15 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local" || !changes.folderLabel) {
     return;
   }
-  const value = changes.folderLabel.newValue || "No folder selected";
-  document.getElementById("folderLabel").textContent = value;
+  const value = changes.folderLabel.newValue || NO_FOLDER_LABEL;
+  updateFolderUi(value);
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local" || !changes.status) {
     return;
   }
-  document.getElementById("status").textContent = formatStatus(changes.status.newValue);
+  renderStatus(changes.status.newValue);
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {

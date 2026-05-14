@@ -20,7 +20,7 @@
           </div>
           <button id="openChatgpt" class="secondary">Open ChatGPT</button>
         </div>
-        <p class="hint">Use the in-page "Sync now" button on chatgpt.com to select a folder the first time.</p>
+        <p class="hint" id="folderHint">Use the in-page "Sync now" button on chatgpt.com to select a folder the first time.</p>
 
         <label>
           <span>Sync interval (minutes)</span>
@@ -48,14 +48,17 @@
         </div>
 
         <div class="actions">
-          <button id="save">Save options</button>
+          <div class="action-with-feedback">
+            <button id="save">Save options</button>
+            <span id="saveFeedback" class="action-feedback" aria-live="polite"></span>
+          </div>
           <button id="syncNow" class="secondary">Sync now</button>
         </div>
       </section>
 
       <section class="card">
         <h2>Status</h2>
-        <div class="status" id="status"></div>
+        <div class="status" id="status" aria-live="polite"></div>
       </section>
 
       <section class="card">

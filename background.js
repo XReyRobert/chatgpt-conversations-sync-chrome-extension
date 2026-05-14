@@ -13,6 +13,7 @@ const STORAGE_KEYS = {
 };
 
 const SYNC_ALARM = "chatgpt-sync-alarm";
+const SYNC_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 let syncInProgress = false;
 
@@ -65,15 +66,18 @@ function statusLooksActive(status) {
   if (!status) {
     return false;
   }
+  const startedAt = status.lastSyncStartedAt ? Date.parse(status.lastSyncStartedAt) : NaN;
+  const finishedAt = status.lastSyncFinishedAt ? Date.parse(status.lastSyncFinishedAt) : NaN;
+  if (Number.isFinite(startedAt) && Number.isFinite(finishedAt) && finishedAt >= startedAt) {
+    return false;
+  }
   if (status.progress) {
     return true;
   }
-  const startedAt = status.lastSyncStartedAt ? Date.parse(status.lastSyncStartedAt) : NaN;
   if (!Number.isFinite(startedAt)) {
     return false;
   }
-  const finishedAt = status.lastSyncFinishedAt ? Date.parse(status.lastSyncFinishedAt) : NaN;
-  return !Number.isFinite(finishedAt) || finishedAt < startedAt;
+  return true;
 }
 
 async function getVisibleStatus() {
@@ -82,6 +86,7 @@ async function getVisibleStatus() {
     const interrupted = {
       ...status,
       lastError: "Previous sync was interrupted. Start sync again.",
+      lastSyncSummary: null,
       lastSyncFinishedAt: nowIso(),
       progress: null
     };
@@ -145,9 +150,15 @@ async function runSync(reason, preferredTabId) {
   const options = await getOptions();
   await setStatus({
     lastSyncStartedAt: nowIso(),
+    lastSyncFinishedAt: null,
+    lastSyncSummary: null,
     lastSyncReason: reason,
     lastError: null,
-    progress: null
+    progress: {
+      processed: 0,
+      total: 0,
+      status: "Starting sync"
+    }
   });
 
   try {
@@ -205,8 +216,14 @@ async function runSync(reason, preferredTabId) {
       let fullInventoryMode = false;
       let checkpointCount = 0;
       let lastCheckpointAt = Date.now();
+      let settled = false;
+      let timeout = null;
       const CHECKPOINT_MIN_MESSAGES = 50;
       const CHECKPOINT_MIN_MS = 15000;
+
+      const checkpointState = () => {
+        setSyncState({ ...nextState }).catch(() => {});
+      };
 
       const maybeCheckpoint = (force) => {
         const now = Date.now();
@@ -219,23 +236,69 @@ async function runSync(reason, preferredTabId) {
         }
         checkpointCount = 0;
         lastCheckpointAt = now;
-        setSyncState({ ...nextState }).catch(() => {});
+        checkpointState();
       };
 
-      const timeout = setTimeout(() => {
-        port.disconnect();
-        reject(new Error("Sync timed out"));
-      }, 5 * 60 * 1000);
+      const clearWatchdog = () => {
+        if (timeout) {
+          clearTimeout(timeout);
+          timeout = null;
+        }
+      };
+
+      const disconnectPort = () => {
+        try {
+          port.disconnect();
+        } catch (err) {
+          // The port may already be closed.
+        }
+      };
+
+      const rejectOnce = (err) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearWatchdog();
+        disconnectPort();
+        checkpointState();
+        reject(err);
+      };
+
+      const resolveOnce = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearWatchdog();
+        disconnectPort();
+        checkpointState();
+        resolve();
+      };
+
+      const resetWatchdog = () => {
+        clearWatchdog();
+        timeout = setTimeout(() => {
+          rejectOnce(new Error("Sync timed out"));
+        }, SYNC_IDLE_TIMEOUT_MS);
+      };
+
+      resetWatchdog();
 
       port.onDisconnect.addListener(() => {
-        clearTimeout(timeout);
-        setSyncState({ ...nextState }).catch(() => {});
+        clearWatchdog();
+        checkpointState();
+        if (!settled) {
+          settled = true;
+          reject(new Error("Sync connection closed before completion."));
+        }
       });
 
       port.onMessage.addListener((msg) => {
         if (!msg || !msg.type) {
           return;
         }
+        resetWatchdog();
 
         if (msg.type === "sync-progress") {
           totalCount = msg.total || totalCount;
@@ -355,21 +418,14 @@ async function runSync(reason, preferredTabId) {
 
 
         if (msg.type === "sync-requires-folder") {
-          clearTimeout(timeout);
-          port.disconnect();
-          reject(new Error("Select a sync folder in the ChatGPT tab."));
+          rejectOnce(new Error("Select a sync folder in the ChatGPT tab."));
         }
 
         if (msg.type === "sync-permission-required") {
-          clearTimeout(timeout);
-          port.disconnect();
-          reject(new Error("Folder permission required. Re-grant access in the ChatGPT tab."));
+          rejectOnce(new Error("Folder permission required. Re-grant access in the ChatGPT tab."));
         }
 
         if (msg.type === "sync-complete") {
-          clearTimeout(timeout);
-          port.disconnect();
-
           if (msg.total) {
             totalCount = msg.total;
           }
@@ -413,7 +469,7 @@ async function runSync(reason, preferredTabId) {
             nextState.inventoryInProgress = false;
           }
 
-          setSyncState(nextState).then(() => {
+          setSyncState(nextState).then(() =>
             setStatus({
               lastSyncFinishedAt: nowIso(),
               lastSyncSummary: {
@@ -423,14 +479,12 @@ async function runSync(reason, preferredTabId) {
                 total: totalCount || indexMap.size
               },
               progress: null
-            }).then(resolve);
-          });
+            })
+          ).then(resolveOnce).catch(rejectOnce);
         }
 
         if (msg.type === "sync-error") {
-          clearTimeout(timeout);
-          port.disconnect();
-          reject(new Error(msg.error || "Sync error"));
+          rejectOnce(new Error(msg.error || "Sync error"));
         }
       });
 
