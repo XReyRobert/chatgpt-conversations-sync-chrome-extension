@@ -61,6 +61,36 @@ async function setStatus(partial) {
   await setInStorage(STORAGE_KEYS.status, { ...current, ...partial });
 }
 
+function statusLooksActive(status) {
+  if (!status) {
+    return false;
+  }
+  if (status.progress) {
+    return true;
+  }
+  const startedAt = status.lastSyncStartedAt ? Date.parse(status.lastSyncStartedAt) : NaN;
+  if (!Number.isFinite(startedAt)) {
+    return false;
+  }
+  const finishedAt = status.lastSyncFinishedAt ? Date.parse(status.lastSyncFinishedAt) : NaN;
+  return !Number.isFinite(finishedAt) || finishedAt < startedAt;
+}
+
+async function getVisibleStatus() {
+  const status = await getFromStorage(STORAGE_KEYS.status, {});
+  if (!syncInProgress && statusLooksActive(status)) {
+    const interrupted = {
+      ...status,
+      lastError: "Previous sync was interrupted. Start sync again.",
+      lastSyncFinishedAt: nowIso(),
+      progress: null
+    };
+    await setInStorage(STORAGE_KEYS.status, interrupted);
+    return interrupted;
+  }
+  return status;
+}
+
 async function getSyncState() {
   return await getFromStorage(STORAGE_KEYS.syncState, {
     conversations: {},
@@ -484,7 +514,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message && message.type === "get-status") {
-    Promise.all([getOptions(), getFromStorage(STORAGE_KEYS.status, {})]).then(
+    Promise.all([getOptions(), getVisibleStatus()]).then(
       ([options, status]) => {
         sendResponse({ ok: true, options, status });
       }

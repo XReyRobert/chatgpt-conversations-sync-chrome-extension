@@ -283,7 +283,7 @@ async function fetchJson(url, accessToken) {
     if (err && err.name === "AbortError") {
       throw new Error("Request timed out");
     }
-    throw err;
+    throw new Error(`Request failed before response: ${err.message || "network error"}`);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -313,11 +313,10 @@ async function fetchConversationPage(accessToken, offset, limit) {
   let lastError;
 
   for (const candidate of limits) {
+    const url =
+      `https://chatgpt.com/backend-api/conversations?offset=${offset}&limit=${candidate}&order=updated`;
     try {
-      const data = await fetchJson(
-        `https://chatgpt.com/backend-api/conversations?offset=${offset}&limit=${candidate}&order=updated`,
-        accessToken
-      );
+      const data = await fetchJson(url, accessToken);
       const list = normalizeConversationList(data);
       const items = list.items || [];
       const total = Number.isFinite(data.total) ? data.total : items.length;
@@ -348,7 +347,8 @@ async function fetchConversationPage(accessToken, offset, limit) {
     }
   }
 
-  throw lastError || new Error("Failed to fetch conversations");
+  const detail = lastError && lastError.message ? `: ${lastError.message}` : "";
+  throw new Error(`Failed to fetch conversation list${detail}`);
 }
 
 async function fetchConversation(id, accessToken) {
@@ -686,8 +686,28 @@ function setIndicator(state, title) {
   uiState.indicator.title = title;
 }
 
+function applyFolderAccessIndicator() {
+  if (folderAccessState === "no-folder") {
+    setIndicator("idle", "No folder selected");
+    return true;
+  }
+  if (folderAccessState === "permission") {
+    setIndicator("error", "Folder access required");
+    return true;
+  }
+  if (folderAccessState === "unavailable") {
+    setIndicator("error", "Folder status unavailable");
+    return true;
+  }
+  return false;
+}
+
 function applyGlobalStatus(status) {
   cachedGlobalStatus = status || null;
+  if (applyFolderAccessIndicator()) {
+    return;
+  }
+
   const syncing = syncInProgress || isGlobalSyncing(status);
   if (syncing) {
     const progress = status && status.progress ? status.progress : null;
@@ -796,7 +816,7 @@ function maybeSendProgress(port, processed, total, cursor, force) {
     type: "sync-progress",
     processed,
     total,
-    status: "Syncing",
+    status: total ? "Syncing" : "Loading conversation list...",
     ...(cursor ? { cursor } : {})
   });
 }
@@ -850,7 +870,7 @@ async function runSync(
     );
     const resumeOffset = forceFullInventory ? getResumeOffset(inventoryCursor) : 0;
     const stopAfterTime = forceFullInventory ? null : getMaxKnownUpdateTime(knownConversations);
-    updateStatus("Loading conversations...");
+    updateStatus("Loading conversation list...");
     safePost(port, {
       type: "sync-mode",
       fullInventory: forceFullInventory,
@@ -876,7 +896,7 @@ async function runSync(
     const progressTotal = () => Math.max(totalHint || 0, listedCount || 0);
 
     updateProgress(0, 0, false);
-    maybeSendProgress(port, 0, 0);
+    maybeSendProgress(port, 0, 0, null, true);
 
     const pageStates = [];
     let nextCursorIndex = 0;
@@ -1150,31 +1170,69 @@ function isSidebarCandidate(element) {
   return false;
 }
 
+function getSidebarScore(element) {
+  if (!isSidebarCandidate(element)) {
+    return 0;
+  }
+
+  let score = 1;
+  if (element.matches('[data-testid="sidebar"]')) {
+    score += 5;
+  }
+  if (element.matches("aside, nav")) {
+    score += 3;
+  }
+  if (findSidebarAnchor(element)) {
+    score += 4;
+  }
+  if (element.querySelector('[data-testid="chat-history"]')) {
+    score += 2;
+  }
+  if (element.querySelector('a[href^="/c/"], a[href^="https://chatgpt.com/c/"]')) {
+    score += 1;
+  }
+  if (element.matches('[data-testid="chat-history"]') || isScrollable(element)) {
+    score -= 3;
+  }
+  return score;
+}
+
 function findSidebarRoot() {
+  const candidates = new Set();
   const selectors = [
     '[data-testid="sidebar"]',
-    '[data-testid="chat-history"]',
     'nav[aria-label="Chat history"]',
     'nav[role="navigation"]',
     'aside',
-    'nav'
+    'nav',
+    '[data-testid="chat-history"]',
+    'a[href^="/c/"]',
+    'a[href^="https://chatgpt.com/c/"]'
   ];
 
   for (const selector of selectors) {
-    const candidate = document.querySelector(selector);
-    if (isSidebarCandidate(candidate)) {
-      return candidate;
+    for (const seed of document.querySelectorAll(selector)) {
+      let candidate = seed;
+      while (candidate && candidate !== document.body) {
+        if (isSidebarCandidate(candidate)) {
+          candidates.add(candidate);
+        }
+        candidate = candidate.parentElement;
+      }
     }
   }
 
-  const navs = Array.from(document.querySelectorAll('nav'));
-  for (const nav of navs) {
-    if (isSidebarCandidate(nav)) {
-      return nav;
+  let best = null;
+  let bestScore = 0;
+  for (const candidate of candidates) {
+    const score = getSidebarScore(candidate);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
     }
   }
 
-  return null;
+  return best;
 }
 
 function findSidebarAnchor(sidebar) {
@@ -1251,6 +1309,11 @@ function findScrollableList(sidebar) {
     }
   }
   return elements.find((element) => isScrollable(element)) || null;
+}
+
+function isMountedInScrollableList(sidebar) {
+  const scrollable = findScrollableList(sidebar);
+  return Boolean(scrollable && uiState && scrollable.contains(uiState.container));
 }
 
 function mountUi() {
@@ -1541,11 +1604,22 @@ function createUi() {
       applyGlobalStatus(null);
     }
   });
+  chrome.runtime.sendMessage({ type: "get-status" }, (response) => {
+    if (chrome.runtime.lastError || !response || !response.ok) {
+      return;
+    }
+    applyGlobalStatus(response.status || null);
+  });
 
   mountUi();
 
   const observer = new MutationObserver(() => {
-    if (!uiState.container.isConnected || uiState.container.style.display === "none") {
+    const sidebar = findSidebarRoot();
+    if (
+      !uiState.container.isConnected ||
+      uiState.container.style.display === "none" ||
+      isMountedInScrollableList(sidebar)
+    ) {
       mountUi();
     }
   });
